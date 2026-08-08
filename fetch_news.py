@@ -6,6 +6,14 @@ from datetime import datetime, timezone, timedelta
 from time import mktime
 import config
 
+# Sent with every feed fetch. Several feeds (e.g. kevinmd.com) 403 on
+# feedparser's default UA but work fine with a normal browser UA — costs
+# nothing to send it everywhere.
+FEED_REQUEST_HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"),
+}
+
 
 def _entry_datetime(entry):
     for key in ("published_parsed", "updated_parsed"):
@@ -83,9 +91,16 @@ def _fetch_feed_group(feeds_dict, max_age_hours, max_items_per_section, excerpt_
 
     for section, feed_urls in feeds_dict.items():
         all_items = []  # every entry fetched, regardless of age (used as fallback)
-        for url in feed_urls:
+        for feed_entry in feed_urls:
+            # Each entry is either a plain url string, or a (url, display_name)
+            # tuple used to override a feed that reports a broken/garbled
+            # <channel><title> of its own (e.g. NDTV) — see config.py.
+            if isinstance(feed_entry, tuple):
+                url, source_override = feed_entry
+            else:
+                url, source_override = feed_entry, None
             try:
-                parsed = feedparser.parse(url)
+                parsed = feedparser.parse(url, request_headers=FEED_REQUEST_HEADERS)
                 status = getattr(parsed, "status", None)
                 if not parsed.entries:
                     # feedparser doesn't raise on HTTP errors (403, etc.) — it just
@@ -94,7 +109,7 @@ def _fetch_feed_group(feeds_dict, max_age_hours, max_items_per_section, excerpt_
                     msg = f"{section} — {url} — {reason}"
                     print(f"[news] WARNING: {msg} — check this feed")
                     warnings.append(msg)
-                source_name = parsed.feed.get("title", url)
+                source_name = source_override or parsed.feed.get("title", url)
                 for entry in parsed.entries:
                     all_items.append({
                         "title": entry.get("title", "Untitled").strip(),
