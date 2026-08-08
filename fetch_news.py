@@ -15,8 +15,45 @@ def _entry_datetime(entry):
     return None
 
 
+_IMG_TAG_RE = re.compile(r'<img[^>]+src="([^"]+)"')
 _TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\s+")
+
+
+def _extract_image(entry):
+    """Best-effort image URL for an entry — checks the common RSS image
+    mechanisms in order, returns None if the feed just doesn't have one."""
+    thumbs = entry.get("media_thumbnail")
+    if thumbs:
+        return thumbs[0].get("url")
+    media = entry.get("media_content")
+    if media:
+        for m in media:
+            if not m.get("type") or m["type"].startswith("image"):
+                if m.get("url"):
+                    return m["url"]
+    for enc in entry.get("enclosures", []):
+        if enc.get("type", "").startswith("image") and enc.get("href"):
+            return enc["href"]
+    # Some feeds only put an <img> inline in the content/summary HTML.
+    for field in ("content", "summary"):
+        val = entry.get(field)
+        if isinstance(val, list):  # feedparser wraps 'content' as a list of dicts
+            val = val[0].get("value", "") if val else ""
+        m = _IMG_TAG_RE.search(val or "")
+        if m:
+            return m.group(1)
+    return None
+
+
+def _best_raw_text(entry):
+    """Some feeds (esp. blogs) put the FULL post in entry.content while
+    summary stays a short teaser; others only populate summary. Use whichever
+    is actually longer rather than assuming which field a given feed uses."""
+    summary = entry.get("summary", "") or ""
+    content_list = entry.get("content")
+    content = content_list[0].get("value", "") if content_list else ""
+    return content if len(content) > len(summary) else summary
 
 
 def _clean_excerpt(raw, max_chars=None):
@@ -36,23 +73,15 @@ def _clean_excerpt(raw, max_chars=None):
     return truncated.rstrip(".,;: ") + "…"
 
 
-def fetch_news():
-    """Returns dict: {section_name: [ {title, link, source, published, excerpt} ]}"""
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=config.NEWS_MAX_AGE_HOURS)
-    results = {}
-
-def fetch_news():
-    """Returns (results, warnings):
-    - results: {section_name: [ {title, link, source, published, excerpt} ]}
-    - warnings: list of "section — url — reason" strings, one per feed that
-      returned 0 entries or a bad HTTP status this run — for surfacing in the
-      PDF and/or the Actions log, not just the log.
-    """
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=config.NEWS_MAX_AGE_HOURS)
+def _fetch_feed_group(feeds_dict, max_age_hours, max_items_per_section, excerpt_max_chars):
+    """Shared fetch/dedupe/trim logic used by both fetch_news() and
+    fetch_blogs() — same shape, different config values (blogs post less
+    often and get a much longer excerpt cap since full text is the point)."""
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
     results = {}
     warnings = []
 
-    for section, feed_urls in config.NEWS_FEEDS.items():
+    for section, feed_urls in feeds_dict.items():
         all_items = []  # every entry fetched, regardless of age (used as fallback)
         for url in feed_urls:
             try:
@@ -67,13 +96,13 @@ def fetch_news():
                     warnings.append(msg)
                 source_name = parsed.feed.get("title", url)
                 for entry in parsed.entries:
-                    raw_summary = entry.get("summary") or entry.get("description", "")
                     all_items.append({
                         "title": entry.get("title", "Untitled").strip(),
                         "link": entry.get("link", ""),
                         "source": source_name,
                         "published": _entry_datetime(entry),
-                        "excerpt": _clean_excerpt(raw_summary),
+                        "excerpt": _clean_excerpt(_best_raw_text(entry), excerpt_max_chars),
+                        "image": _extract_image(entry),
                     })
             except Exception as e:
                 msg = f"{section} — {url} — error: {e}"
@@ -98,9 +127,29 @@ def fetch_news():
             # so the section isn't empty (better slightly stale than blank).
             deduped = _dedupe_sorted(all_items)
 
-        results[section] = deduped[:config.MAX_NEWS_ITEMS_PER_SECTION]
+        results[section] = deduped[:max_items_per_section]
 
     return results, warnings
+
+
+def fetch_news():
+    """Returns (results, warnings) — see _fetch_feed_group."""
+    return _fetch_feed_group(
+        config.NEWS_FEEDS, config.NEWS_MAX_AGE_HOURS,
+        config.MAX_NEWS_ITEMS_PER_SECTION, config.NEWS_EXCERPT_MAX_CHARS,
+    )
+
+
+def fetch_blogs():
+    """Same shape as fetch_news() but for long-form blog sources — longer
+    lookback window (blogs post less often), fewer items per section, much
+    higher excerpt cap since these feeds actually carry full post text."""
+    return _fetch_feed_group(
+        config.BLOG_FEEDS,
+        getattr(config, "BLOG_MAX_AGE_HOURS", 168),
+        getattr(config, "MAX_BLOG_ITEMS_PER_SECTION", 3),
+        getattr(config, "BLOG_EXCERPT_MAX_CHARS", 3000),
+    )
 
 
 if __name__ == "__main__":
@@ -115,3 +164,4 @@ if __name__ == "__main__":
         print(f"\n=== {len(warnings)} feed warning(s) ===")
         for w in warnings:
             print(f"! {w}")
+            
