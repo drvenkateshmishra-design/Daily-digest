@@ -1,126 +1,166 @@
-"""Fetches recent journal articles from PubMed via NCBI E-utilities (free, no key needed)."""
-import requests
-import time
-import xml.etree.ElementTree as ET
+"""Fetches and filters recent items from configured RSS feeds."""
+import feedparser
+import re
+import html as html_lib
+from datetime import datetime, timezone, timedelta
+from time import mktime
 import config
 
-ESEARCH = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
-ESUMMARY = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
-EFETCH = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
+
+def _entry_datetime(entry):
+    for key in ("published_parsed", "updated_parsed"):
+        val = entry.get(key)
+        if val:
+            return datetime.fromtimestamp(mktime(val), tz=timezone.utc)
+    return None
 
 
-def _is_tier1(journal_name):
-    name = (journal_name or "").lower()
-    return any(t in name for t in config.TIER1_JOURNALS)
+_IMG_TAG_RE = re.compile(r'<img[^>]+src="([^"]+)"')
+_TAG_RE = re.compile(r"<[^>]+>")
+_WS_RE = re.compile(r"\s+")
 
 
-def _truncate(text, max_chars=None):
-    max_chars = max_chars or getattr(config, "JOURNAL_ABSTRACT_MAX_CHARS", 600)
-    text = " ".join(text.split())  # collapse whitespace
+def _extract_image(entry):
+    """Best-effort image URL for an entry — checks the common RSS image
+    mechanisms in order, returns None if the feed just doesn't have one."""
+    thumbs = entry.get("media_thumbnail")
+    if thumbs:
+        return thumbs[0].get("url")
+    media = entry.get("media_content")
+    if media:
+        for m in media:
+            if not m.get("type") or m["type"].startswith("image"):
+                if m.get("url"):
+                    return m["url"]
+    for enc in entry.get("enclosures", []):
+        if enc.get("type", "").startswith("image") and enc.get("href"):
+            return enc["href"]
+    # Some feeds only put an <img> inline in the content/summary HTML.
+    for field in ("content", "summary"):
+        val = entry.get(field)
+        if isinstance(val, list):  # feedparser wraps 'content' as a list of dicts
+            val = val[0].get("value", "") if val else ""
+        m = _IMG_TAG_RE.search(val or "")
+        if m:
+            return m.group(1)
+    return None
+
+
+def _best_raw_text(entry):
+    """Some feeds (esp. blogs) put the FULL post in entry.content while
+    summary stays a short teaser; others only populate summary. Use whichever
+    is actually longer rather than assuming which field a given feed uses."""
+    summary = entry.get("summary", "") or ""
+    content_list = entry.get("content")
+    content = content_list[0].get("value", "") if content_list else ""
+    return content if len(content) > len(summary) else summary
+
+
+def _clean_excerpt(raw, max_chars=None):
+    """Strip HTML, decode entities, collapse whitespace, truncate on a word
+    boundary. Uses whatever summary the feed itself provides — no scraping,
+    no fetching the article page, so it works the same whether the source
+    is open or paywalled."""
+    if not raw:
+        return ""
+    max_chars = max_chars or getattr(config, "NEWS_EXCERPT_MAX_CHARS", 500)
+    text = _TAG_RE.sub(" ", raw)
+    text = html_lib.unescape(text)
+    text = _WS_RE.sub(" ", text).strip()
     if len(text) <= max_chars:
         return text
-    return text[:max_chars].rsplit(" ", 1)[0].rstrip(".,;: ") + "…"
+    truncated = text[:max_chars].rsplit(" ", 1)[0]
+    return truncated.rstrip(".,;: ") + "…"
 
 
-def _fetch_abstracts(ids):
-    """Returns dict: {pmid: abstract_text}. One request for all ids passed in —
-    call this AFTER trimming to the articles you're actually keeping, not on
-    every search hit, to stay polite to NCBI's rate limit."""
-    if not ids:
-        return {}
-    try:
-        r = requests.get(EFETCH, params={
-            "db": "pubmed", "id": ",".join(ids),
-            "rettype": "abstract", "retmode": "xml",
-        }, timeout=25)
-        r.raise_for_status()
-        root = ET.fromstring(r.content)
-        abstracts = {}
-        for article in root.findall(".//PubmedArticle"):
-            pmid_el = article.find(".//PMID")
-            if pmid_el is None or not pmid_el.text:
-                continue
-            pmid = pmid_el.text
-            parts = []
-            for ab in article.findall(".//Abstract/AbstractText"):
-                label = ab.get("Label")
-                text = "".join(ab.itertext()).strip()
-                if not text:
-                    continue
-                parts.append(f"{label}: {text}" if label else text)
-            if parts:
-                abstracts[pmid] = _truncate(" ".join(parts))
-        return abstracts
-    except Exception as e:
-        print(f"[journals] Error fetching abstracts for {len(ids)} article(s): {e}")
-        return {}
-
-
-def _fetch_section(term):
-    query = f'({term}) AND ("last {config.PUBMED_LOOKBACK_DAYS} days"[PDat])'
-    try:
-        r = requests.get(ESEARCH, params={
-            "db": "pubmed", "term": query, "retmax": 40,
-            "sort": "date", "retmode": "json",
-        }, timeout=20)
-        r.raise_for_status()
-        ids = r.json()["esearchresult"]["idlist"]
-        if not ids:
-            return []
-
-        r2 = requests.get(ESUMMARY, params={
-            "db": "pubmed", "id": ",".join(ids), "retmode": "json",
-        }, timeout=20)
-        r2.raise_for_status()
-        data = r2.json()["result"]
-
-        articles = []
-        for pmid in ids:
-            item = data.get(pmid)
-            if not item:
-                continue
-            journal = item.get("fulljournalname", "")
-            articles.append({
-                "pmid": pmid,
-                "title": item.get("title", "Untitled").strip().rstrip("."),
-                "journal": journal,
-                "pubdate": item.get("pubdate", ""),
-                "link": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
-                "tier1": _is_tier1(journal),
-            })
-
-        # Tier-1 journals first, then by recency (list is already date-sorted from esearch)
-        articles.sort(key=lambda a: not a["tier1"])
-        articles = articles[:config.MAX_ARTICLES_PER_SECTION]
-
-        # Only fetch abstracts for the articles we're actually keeping.
-        time.sleep(0.34)  # NCBI unauthenticated rate limit is 3 req/sec
-        abstracts = _fetch_abstracts([a["pmid"] for a in articles])
-        for a in articles:
-            a["excerpt"] = abstracts.get(a["pmid"], "")  # same key as news items use, so
-            # build_pdf.py's shared _story_block() renders it with zero changes needed there.
-
-        return articles
-    except Exception as e:
-        print(f"[journals] Error fetching '{term[:40]}...': {e}")
-        return []
-
-
-def fetch_journals():
-    """Returns dict: {section_name: [ {title, journal, pubdate, link, tier1, excerpt} ]}"""
+def _fetch_feed_group(feeds_dict, max_age_hours, max_items_per_section, excerpt_max_chars):
+    """Shared fetch/dedupe/trim logic used by both fetch_news() and
+    fetch_blogs() — same shape, different config values (blogs post less
+    often and get a much longer excerpt cap since full text is the point)."""
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
     results = {}
-    for section, term in config.JOURNAL_SEARCHES.items():
-        results[section] = _fetch_section(term)
-        time.sleep(0.5)  # be polite to NCBI's rate limit (3 req/sec unauthenticated)
-    return results
+    warnings = []
+
+    for section, feed_urls in feeds_dict.items():
+        all_items = []  # every entry fetched, regardless of age (used as fallback)
+        for url in feed_urls:
+            try:
+                parsed = feedparser.parse(url)
+                status = getattr(parsed, "status", None)
+                if not parsed.entries:
+                    # feedparser doesn't raise on HTTP errors (403, etc.) — it just
+                    # comes back empty, so this is the only place that catches it.
+                    reason = f"HTTP {status}" if status and status >= 400 else "0 entries returned"
+                    msg = f"{section} — {url} — {reason}"
+                    print(f"[news] WARNING: {msg} — check this feed")
+                    warnings.append(msg)
+                source_name = parsed.feed.get("title", url)
+                for entry in parsed.entries:
+                    all_items.append({
+                        "title": entry.get("title", "Untitled").strip(),
+                        "link": entry.get("link", ""),
+                        "source": source_name,
+                        "published": _entry_datetime(entry),
+                        "excerpt": _clean_excerpt(_best_raw_text(entry), excerpt_max_chars),
+                        "image": _extract_image(entry),
+                    })
+            except Exception as e:
+                msg = f"{section} — {url} — error: {e}"
+                print(f"[news] Skipping feed {url}: {e}")
+                warnings.append(msg)
+
+        def _dedupe_sorted(items):
+            items = sorted(items, key=lambda x: x["published"] or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+            seen, out = set(), []
+            for it in items:
+                key = it["title"].lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append(it)
+            return out
+
+        recent = [it for it in all_items if not it["published"] or it["published"] >= cutoff]
+        deduped = _dedupe_sorted(recent)
+        if not deduped:
+            # Fallback: nothing in the age window — show the most recent items anyway
+            # so the section isn't empty (better slightly stale than blank).
+            deduped = _dedupe_sorted(all_items)
+
+        results[section] = deduped[:max_items_per_section]
+
+    return results, warnings
+
+
+def fetch_news():
+    """Returns (results, warnings) — see _fetch_feed_group."""
+    return _fetch_feed_group(
+        config.NEWS_FEEDS, config.NEWS_MAX_AGE_HOURS,
+        config.MAX_NEWS_ITEMS_PER_SECTION, config.NEWS_EXCERPT_MAX_CHARS,
+    )
+
+
+def fetch_blogs():
+    """Same shape as fetch_news() but for long-form blog sources — longer
+    lookback window (blogs post less often), fewer items per section, much
+    higher excerpt cap since these feeds actually carry full post text."""
+    return _fetch_feed_group(
+        config.BLOG_FEEDS,
+        getattr(config, "BLOG_MAX_AGE_HOURS", 168),
+        getattr(config, "MAX_BLOG_ITEMS_PER_SECTION", 3),
+        getattr(config, "BLOG_EXCERPT_MAX_CHARS", 3000),
+    )
 
 
 if __name__ == "__main__":
-    journals = fetch_journals()
-    for section, items in journals.items():
+    news, warnings = fetch_news()
+    for section, items in news.items():
         print(f"\n=== {section} ({len(items)}) ===")
         for it in items:
-            star = "★" if it["tier1"] else " "
-            print(f"{star} {it['title'][:70]}  [{it['journal']}]")
+            print(f"- {it['title']}  [{it['source']}]")
             if it["excerpt"]:
-                print(f"    {it['excerpt'][:150]}...")
+                print(f"    {it['excerpt'][:120]}...")
+    if warnings:
+        print(f"\n=== {len(warnings)} feed warning(s) ===")
+        for w in warnings:
+            print(f"! {w}")
