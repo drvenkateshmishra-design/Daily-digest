@@ -1,10 +1,10 @@
-"""Entry point: fetch content, build the PDF, send it to Telegram. Run daily by GitHub Actions."""
+"""Entry point: fetch content, build the PDF, email it. Run daily by GitHub Actions."""
 import os
 
 from fetch_news import fetch_news
 from fetch_journals import fetch_journals
 from build_pdf import build_pdf
-from send_telegram import send as send_telegram
+from send_email import send as send_email
 
 OUTPUT_PATH = os.path.join(os.path.dirname(__file__), "digest.pdf")
 
@@ -18,8 +18,8 @@ def main():
     print("Building PDF...")
     build_pdf(news, journals, OUTPUT_PATH)
 
-    print("Sending to Telegram...")
-    send_telegram(OUTPUT_PATH)
+    print("Sending email...")
+    send_email(OUTPUT_PATH)
 
     print("Done.")
 
