@@ -16,25 +16,36 @@ NEWS_FEEDS = {
     ],
     "India & General": [
         "https://feeds.bbci.co.uk/news/world/asia/india/rss.xml",
-        "https://feeds.feedburner.com/ndtvnews-india-news",
+        # NDTV's own feed reports a broken/garbled <channel><title> ("NDTV
+        # News Search Records Found 1000") — this override tuple form
+        # (url, display_name) forces the real name in the byline instead.
+        # See fetch_news.py: any entry can be a plain url string, or a
+        # (url, display_name) tuple to override a broken feed-reported name.
+        ("https://feeds.feedburner.com/ndtvnews-india-news", "NDTV News"),
         "https://feeds.bbci.co.uk/news/world/rss.xml",
     ],
     "Tech & Gadgets": [
-        "https://gadgets360.com/rss/feeds",
-        "https://gadgets360.com/rss/reviews",
+        # Gadgets360's two feeds 403 unconditionally (confirmed: still 403
+        # even with a full browser User-Agent — infra-level IP block, not
+        # a UA issue) — dropped, replaced with Android Police below.
         "https://www.gsmarena.com/rss-news-reviews.php3",
         "http://feeds.feedburner.com/techgenyz",
+        "https://www.androidpolice.com/feed/",  # verified live, headline+excerpt (not full-text, fine for NEWS)
     ],
     "Bollywood & Entertainment": [
         "https://www.bollywoodhungama.com/feed",
         "https://www.pinkvilla.com/rss.xml",
-        "https://www.filmfare.com/feeds/feeds.xml",
+        # Filmfare 403s unconditionally — dropped, replaced with BH's own
+        # news-specific feed (verified: real article bodies, not teasers).
+        "https://www.bollywoodhungama.com/rss/news.xml",
     ],
     "Sports": [
         "http://www.espncricinfo.com/rss/content/story/feeds/0.xml",
         "http://feeds.feedburner.com/ndtvsports-cricket",
-        "https://www.sportskeeda.com/feed",
         "http://feeds.bbci.co.uk/sport/rss.xml",
+        # Sportskeeda 403s unconditionally — dropped, replaced with
+        # Cricinfo's India-team-tagged feed (verified live today).
+        "https://www.espncricinfo.com/rss/content/story/feeds/6.xml",
     ],
 }
 MAX_NEWS_ITEMS_PER_SECTION = 6
@@ -47,26 +58,37 @@ BLOG_FEEDS = {
         "https://dontforgetthebubbles.com/feed/",
         "https://pedemmorsels.com/feed/",
         "https://rebelem.com/medical-category/pediatrics/feed/",
+        # Needs a browser User-Agent to avoid a 403 (now sent by default in
+        # fetch_news.py) — verified real content, but medium-length (~450
+        # chars, more substantial excerpt than true full-text posts).
+        "https://www.kevinmd.com/feed",
     ],
     "AI, ML & Data Science": [
         "https://www.interconnects.ai/feed",
         "https://magazine.sebastianraschka.com/feed",
         "https://thegradient.pub/rss/",
         "https://www.latent.space/feed",
+        "https://simonwillison.net/atom/everything/",  # verified full-text, near-daily
+        "https://jack-clark.net/feed/",  # Import AI — verified full-text, long-form
     ],
     "Indian Commentary": [
         "https://publicpolicy.substack.com/feed",
         "https://ajayshahblog.blogspot.com/feeds/posts/default",
         "https://takshashiladispatch.substack.com/feed",
         "https://feeds.feedburner.com/indiauncut-full",
+        "https://swarajyamag.com/feed",  # verified full-text (NOT /commentary/feed, which 404s)
     ],
     "Science & Technology": [
         "https://www.construction-physics.com/feed",
         "https://www.asimov.press/feed",
+        # Quanta Magazine's RSS (incl. the api.quantamagazine.org endpoint)
+        # was tested and only returns ~400-char teasers, not full text —
+        # deliberately not added despite its reputation.
     ],
     "Space": [
         "https://www.nasa.gov/rss/dyn/breaking_news.rss",
         "https://briankoberlein.com/index.xml",
+        "https://behindtheblack.com/feed/",  # verified real full posts (Robert Zimmerman), near-daily
     ],
     "Astrophotography": [
         "https://astroblogger.blogspot.com/feeds/posts/default",
@@ -78,6 +100,28 @@ BLOG_FEEDS = {
     "Physics": [
         "https://www.math.columbia.edu/~woit/wordpress/?feed=rss2",
         "https://www.preposterousuniverse.com/blog/feed/",
+        # profmattstrassler.com/feed and backreaction.blogspot.com were
+        # tested — the former's feed has only 1 entry, dated 6 months ago
+        # (dormant), the latter is teaser-only despite its reputation.
+        # Neither cleared the bar, so neither was added.
+    ],
+    "Minimalism": [
+        "https://nourishingminimalism.com/feed",  # verified: excellent full-text, near-daily
+        "https://www.theminimalists.com/feed/",  # verified: full-text, mixed length but substantial
+        "https://leibal.com/feed/",  # verified: full-text, design/product-focused minimalism
+        # zenhabits.net/feed (404, dead), becomingminimalist (feed serves
+        # stale cached content dated 2008), simplelionheartlife (returns
+        # HTTP 202 with no entries, unusable) were all tested and rejected.
+    ],
+    "Spirituality": [
+        "https://dhammafootsteps.com/feed/",  # verified full-text (Theravada/Advaita) — posts infrequently, latest ~2 months old as of this writing
+        "https://feeds.feedburner.com/theexistentialbuddhist",  # verified full-text, ~2-3 week cadence
+        # wildmind.org (both feed paths return HTTP 202 with no entries,
+        # unusable), sameoldzen (mostly empty-body entries), edcyzewski.com
+        # (full-text but dormant ~4.5 months), mindfulbalance.org (fresh but
+        # teaser-only) were all tested and rejected. This section is
+        # thinner than the others as a result — say the word if you want
+        # another pass at finding more.
     ],
 }
 BLOG_MAX_AGE_HOURS = 168  # 1 week — blogs post less often than news
