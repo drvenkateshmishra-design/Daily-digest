@@ -42,10 +42,8 @@ TIER1_JOURNALS = [
     "intensive care medicine", "npj digital medicine", "nature",
 ]
 
-# ---- WHATSAPP DELIVERY (Twilio) ----
-# Real values come from GitHub Actions secrets — do not hardcode them here.
-TWILIO_WHATSAPP_FROM = "whatsapp:+14155238886"  # Twilio sandbox number, fixed
-# TWILIO_WHATSAPP_TO is read from a secret (your number, e.g. "whatsapp:+9198XXXXXXXX")
+# ---- TELEGRAM DELIVERY ----
+# Bot token and chat ID come from GitHub Actions secrets — do not hardcode them here.
 
 # ---- OUTPUT ----
 PDF_TITLE = "Daily Digest"

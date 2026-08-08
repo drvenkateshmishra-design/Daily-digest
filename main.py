@@ -1,31 +1,27 @@
-"""Entry point: fetch content, build the PDF, save it into docs/ for GitHub Pages."""
+"""Entry point: fetch content, build the PDF, send it to Telegram. Run daily by GitHub Actions."""
 import os
-from datetime import datetime
 
 from fetch_news import fetch_news
 from fetch_journals import fetch_journals
 from build_pdf import build_pdf
+from send_telegram import send as send_telegram
 
-OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "docs")
+OUTPUT_PATH = os.path.join(os.path.dirname(__file__), "digest.pdf")
 
 
 def main():
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-
     print("Fetching news...")
     news = fetch_news()
     print("Fetching journal articles...")
     journals = fetch_journals()
 
-    date_str = datetime.now().strftime("%Y-%m-%d")
-    dated_path = os.path.join(OUTPUT_DIR, f"digest-{date_str}.pdf")
-    latest_path = os.path.join(OUTPUT_DIR, "latest.pdf")
-
     print("Building PDF...")
-    build_pdf(news, journals, dated_path)
-    build_pdf(news, journals, latest_path)  # same content, stable filename for WhatsApp
+    build_pdf(news, journals, OUTPUT_PATH)
 
-    print(f"Done. Wrote {dated_path} and {latest_path}")
+    print("Sending to Telegram...")
+    send_telegram(OUTPUT_PATH)
+
+    print("Done.")
 
 
 if __name__ == "__main__":
