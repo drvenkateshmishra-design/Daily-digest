@@ -60,7 +60,23 @@ def _styles():
                            spaceAfter=1))
     ss.add(ParagraphStyle("Empty", parent=ss["Normal"], fontName="Times-Italic",
                            fontSize=9.5, textColor=GREY, spaceAfter=4))
+
+    # ---- Front page teasers ----
+    ss.add(ParagraphStyle("TeaserLabel", parent=ss["Normal"], fontName="Times-Bold",
+                           fontSize=8, textColor=ACCENT, spaceAfter=1))
+    ss.add(ParagraphStyle("TeaserHeadline", parent=ss["Normal"], fontName="Times-Bold",
+                           fontSize=10.5, leading=13, textColor=INK, spaceAfter=1))
+    ss.add(ParagraphStyle("TeaserDek", parent=ss["Normal"], fontName="Times-Roman",
+                           fontSize=9, leading=11.5, textColor=INK, spaceAfter=2))
     return ss
+
+
+def _teaser_dek(excerpt, max_chars=140):
+    if not excerpt:
+        return ""
+    if len(excerpt) <= max_chars:
+        return excerpt
+    return excerpt[:max_chars].rsplit(" ", 1)[0].rstrip(".,;: ") + "…"
 
 
 def _byline(it):
@@ -116,7 +132,48 @@ def build_pdf(news, journals, output_path):
     ]))
     story.append(edition_row)
     story.append(HRFlowable(width="100%", thickness=3, color=BLACK, spaceBefore=3, spaceAfter=2))
-    story.append(HRFlowable(width="100%", thickness=0.75, color=BLACK, spaceBefore=1, spaceAfter=16))
+    story.append(HRFlowable(width="100%", thickness=0.75, color=BLACK, spaceBefore=1, spaceAfter=14))
+
+    # ---- FRONT PAGE (top story teaser from every section, at a glance) ----
+    story.append(Paragraph("TODAY'S HEADLINES", ss["SectionHeader"]))
+    story.append(HRFlowable(width="100%", thickness=1, color=NAVY, spaceAfter=8))
+
+    any_teaser = False
+    for section, items in news.items():
+        if not items:
+            continue
+        any_teaser = True
+        top = items[0]
+        story.append(Paragraph(section.upper(), ss["TeaserLabel"]))
+        headline = f'<link href="{top["link"]}" color="#1a2b4c">{top["title"]}</link>' if top.get("link") else top["title"]
+        story.append(Paragraph(headline, ss["TeaserHeadline"]))
+        dek = _teaser_dek(top.get("excerpt", ""))
+        if dek:
+            story.append(Paragraph(dek, ss["TeaserDek"]))
+
+    # top tier-1 journal pick, if any, gets a mention too
+    top_journal = None
+    for section, items in journals.items():
+        for it in items:
+            if it.get("tier1"):
+                top_journal = it
+                break
+        if top_journal:
+            break
+    if top_journal:
+        story.append(Paragraph("ALSO INSIDE", ss["TeaserLabel"]))
+        story.append(Paragraph(
+            f'&#9733; Journal Watch — <link href="{top_journal["link"]}" color="#1a2b4c">{top_journal["title"]}</link>',
+            ss["TeaserDek"]
+        ))
+        any_teaser = True
+
+    if not any_teaser:
+        story.append(Paragraph("No stories today.", ss["Empty"]))
+
+    story.append(Spacer(1, 6))
+    story.append(HRFlowable(width="100%", thickness=2.2, color=NAVY, spaceBefore=2, spaceAfter=2))
+    story.append(HRFlowable(width="100%", thickness=0.5, color=NAVY, spaceBefore=1, spaceAfter=16))
 
     # ---- NEWS ----
     story.append(Paragraph("NEWS", ss["SectionHeader"]))
