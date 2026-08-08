@@ -1,18 +1,38 @@
 """Builds the formatted PDF from fetched news + journal data using reportlab.
 
-Newspaper-styled: serif (Times) typography throughout, a broadsheet-style
-masthead (nameplate + motto + edition/date line, double rules), and each
-news item rendered as headline + excerpt + byline + explicit "read full
-article" link.
+Newspaper-styled: serif (Times) typography, a broadsheet masthead, a front
+page of teasers, real images from the RSS feeds where available (two-column
+image+text layout per story), colored section "kicker" tags, and a quiet
+feed-health footer when something's broken.
 """
-from datetime import datetime
+from datetime import datetime, date
+import os
+import random
+from io import BytesIO
+import requests
+from PIL import Image as PILImage
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
-from reportlab.lib.colors import HexColor
+from reportlab.lib.colors import HexColor, white
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT, TA_RIGHT
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable, Table, TableStyle
+from reportlab.platypus import (SimpleDocTemplate, Paragraph, Spacer, HRFlowable,
+                                 Table, TableStyle, Image, PageBreak)
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 import config
+
+# Devanagari needs its own embedded font — the standard PDF fonts (Times etc.)
+# have no Devanagari glyphs at all. Falls back gracefully (Latin
+# transliteration only, no boxes/garbage) if the font file isn't present.
+DEVANAGARI_FONT = "NotoDevanagari"
+_FONT_PATH = os.path.join(os.path.dirname(__file__), "fonts", "NotoSerifDevanagari.ttf")
+try:
+    pdfmetrics.registerFont(TTFont(DEVANAGARI_FONT, _FONT_PATH))
+    DEVANAGARI_AVAILABLE = True
+except Exception as e:
+    print(f"[pdf] Devanagari font not available ({e}) — Sanskrit/Hindi will show transliteration only")
+    DEVANAGARI_AVAILABLE = False
 
 NAVY = HexColor("#1a2b4c")
 GREY = HexColor("#666666")
@@ -21,11 +41,17 @@ ACCENT = HexColor("#c0392b")
 INK = HexColor("#1a1a1a")
 BLACK = HexColor("#000000")
 
+CONTENT_WIDTH = 170 * mm  # A4 width minus 20mm margins each side
+IMG_COL_WIDTH = 38 * mm
+IMG_MAX_HEIGHT = 30 * mm
+TEXT_COL_WIDTH = CONTENT_WIDTH - IMG_COL_WIDTH - 4 * mm
+TEASER_IMG_WIDTH = 26 * mm
+TEASER_IMG_HEIGHT = 19 * mm
+
 
 def _styles():
     ss = getSampleStyleSheet()
 
-    # ---- Masthead (broadsheet-style nameplate) ----
     ss.add(ParagraphStyle("Nameplate", parent=ss["Title"], fontName="Times-Bold",
                            textColor=BLACK, fontSize=40, leading=42,
                            alignment=TA_CENTER, spaceAfter=1))
@@ -37,18 +63,16 @@ def _styles():
     ss.add(ParagraphStyle("EditionRight", parent=ss["Normal"], fontName="Times-Roman",
                            textColor=INK, fontSize=8.5, alignment=TA_RIGHT))
 
-    # ---- Section / sub-section headers ----
     ss.add(ParagraphStyle("SectionHeader", parent=ss["Heading1"], fontName="Times-Bold",
                            textColor=NAVY, fontSize=15, leading=18,
                            spaceBefore=18, spaceAfter=4, tracking=1))
-    ss.add(ParagraphStyle("SubHeader", parent=ss["Heading2"], fontName="Times-BoldItalic",
-                           textColor=ACCENT, fontSize=12, leading=15,
-                           spaceBefore=12, spaceAfter=6))
+    ss.add(ParagraphStyle("Kicker", parent=ss["Normal"], fontName="Times-Bold",
+                           textColor=white, fontSize=8.5, leading=11,
+                           alignment=TA_LEFT))
 
-    # ---- Story blocks ----
     ss.add(ParagraphStyle("Headline", parent=ss["Normal"], fontName="Times-Bold",
                            fontSize=11.5, leading=14.5, textColor=INK,
-                           spaceBefore=7, spaceAfter=2))
+                           spaceBefore=0, spaceAfter=2))
     ss.add(ParagraphStyle("Excerpt", parent=ss["Normal"], fontName="Times-Roman",
                            fontSize=9.7, leading=13, textColor=INK,
                            alignment=TA_JUSTIFY, spaceAfter=3))
@@ -61,7 +85,6 @@ def _styles():
     ss.add(ParagraphStyle("Empty", parent=ss["Normal"], fontName="Times-Italic",
                            fontSize=9.5, textColor=GREY, spaceAfter=4))
 
-    # ---- Front page teasers ----
     ss.add(ParagraphStyle("TeaserLabel", parent=ss["Normal"], fontName="Times-Bold",
                            fontSize=8, textColor=ACCENT, spaceAfter=1))
     ss.add(ParagraphStyle("TeaserHeadline", parent=ss["Normal"], fontName="Times-Bold",
@@ -69,12 +92,174 @@ def _styles():
     ss.add(ParagraphStyle("TeaserDek", parent=ss["Normal"], fontName="Times-Roman",
                            fontSize=9, leading=11.5, textColor=INK, spaceAfter=2))
 
-    # ---- Maintenance footer (feed health) ----
     ss.add(ParagraphStyle("MaintHeader", parent=ss["Normal"], fontName="Times-Bold",
                            fontSize=9, textColor=GREY, spaceBefore=4, spaceAfter=3))
     ss.add(ParagraphStyle("MaintItem", parent=ss["Normal"], fontName="Times-Roman",
                            fontSize=7.8, leading=10, textColor=GREY, spaceAfter=1))
+
+    # ---- Thoughts for the day (Sanskrit / English / Hindi) ----
+    deva_font = DEVANAGARI_FONT if DEVANAGARI_AVAILABLE else "Times-Roman"
+    ss.add(ParagraphStyle("ThoughtsHeader", parent=ss["Normal"], fontName="Times-BoldItalic",
+                           fontSize=9.5, textColor=white, alignment=TA_CENTER, spaceAfter=0))
+    ss.add(ParagraphStyle("DevaQuote", parent=ss["Normal"], fontName=deva_font,
+                           fontSize=13, leading=24, textColor=INK, alignment=TA_CENTER, spaceAfter=2))
+    ss.add(ParagraphStyle("DevaMeta", parent=ss["Normal"], fontName="Times-Italic",
+                           fontSize=8.3, leading=11, textColor=GREY, alignment=TA_CENTER, spaceAfter=0))
+    ss.add(ParagraphStyle("EnglishQuote", parent=ss["Normal"], fontName="Times-Italic",
+                           fontSize=10.5, leading=14, textColor=INK, alignment=TA_CENTER, spaceAfter=2))
+    ss.add(ParagraphStyle("EnglishMeta", parent=ss["Normal"], fontName="Times-Roman",
+                           fontSize=8.3, leading=11, textColor=GREY, alignment=TA_CENTER, spaceAfter=0))
+    ss.add(ParagraphStyle("DevaPoem", parent=ss["Normal"], fontName=deva_font,
+                           fontSize=11.5, leading=21, textColor=INK, alignment=TA_CENTER, spaceAfter=2))
+    ss.add(ParagraphStyle("DevaPoetMeta", parent=ss["Normal"], fontName=deva_font,
+                           fontSize=8.3, leading=14, textColor=GREY, alignment=TA_CENTER, spaceAfter=0))
     return ss
+
+
+# ---------------------------------------------------------------- images ---
+
+_image_bytes_cache = {}
+
+
+def _fetch_image_bytes(url, timeout=8):
+    """Downloads raw image bytes once per URL per run. Returns None on any
+    failure (timeout, non-image content-type, oversized, blocked, corrupt) —
+    a missing image should never break the PDF, just fall back to text-only."""
+    if not url:
+        return None
+    if url in _image_bytes_cache:
+        return _image_bytes_cache[url]
+    try:
+        r = requests.get(url, timeout=timeout, headers={"User-Agent": "Mozilla/5.0"})
+        r.raise_for_status()
+        if not r.headers.get("Content-Type", "").startswith("image"):
+            _image_bytes_cache[url] = None
+            return None
+        data = r.content
+        if len(data) > 4_000_000:  # 4MB safety cap
+            _image_bytes_cache[url] = None
+            return None
+        _image_bytes_cache[url] = data
+        return data
+    except Exception as e:
+        print(f"[pdf] Skipping image {url}: {e}")
+        _image_bytes_cache[url] = None
+        return None
+
+
+def _make_image_flowable(url, max_w, max_h):
+    """Fresh Image flowable each call (reportlab Image objects carry layout
+    state, so never reuse one instance twice even if the bytes are cached)."""
+    data = _fetch_image_bytes(url)
+    if not data:
+        return None
+    try:
+        pil_img = PILImage.open(BytesIO(data))
+        orig_w, orig_h = pil_img.size
+        if orig_w <= 0 or orig_h <= 0:
+            return None
+        scale = min(max_w / orig_w, max_h / orig_h, 1.0)  # never upscale
+        return Image(BytesIO(data), width=orig_w * scale, height=orig_h * scale)
+    except Exception as e:
+        print(f"[pdf] Skipping malformed image {url}: {e}")
+        return None
+
+
+# ------------------------------------------------------------- kickers -----
+
+def _kicker(text, ss):
+    """A small colored 'flag' tag for a section label — hugs its own text
+    width rather than spanning the page, like a magazine section tag."""
+    t = Table([[Paragraph(text.upper(), ss["Kicker"])]], colWidths=None)
+    t.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), ACCENT),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+        ("TOPPADDING", (0, 0), (-1, -1), 2.5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2.5),
+    ]))
+    t.hAlign = "LEFT"
+    return t
+
+
+def _thoughts_for_the_day(ss):
+    """A bordered box with one Sanskrit shloka, one English quote, and one
+    Hindi doha — all classical/public-domain, picked deterministically per
+    calendar day (same picks if the workflow reruns same-day)."""
+    rng = random.Random(int(date.today().strftime("%Y%m%d")))
+    sk = rng.choice(config.SANSKRIT_QUOTES)
+    en = rng.choice(config.ENGLISH_QUOTES)
+    hi = rng.choice(config.HINDI_POEMS)
+
+    inner = [
+        Paragraph(sk["deva"], ss["DevaQuote"]),
+        Paragraph(f'{sk["translit"]} — &ldquo;{sk["meaning"]}&rdquo; ({sk["source"]})', ss["DevaMeta"]),
+        Spacer(1, 8),
+        Paragraph(f'&ldquo;{en["text"]}&rdquo;', ss["EnglishQuote"]),
+        Paragraph(f'— {en["author"]}', ss["EnglishMeta"]),
+        Spacer(1, 8),
+        Paragraph(hi["lines"], ss["DevaPoem"]),
+        Paragraph(f'— {hi["poet"]}', ss["DevaPoetMeta"]),
+    ]
+
+    header = Table([[Paragraph("THOUGHTS FOR THE DAY", ss["ThoughtsHeader"])]], colWidths=[CONTENT_WIDTH])
+    header.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), NAVY),
+        ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+
+    body = Table([[inner]], colWidths=[CONTENT_WIDTH])
+    body.setStyle(TableStyle([
+        ("BOX", (0, 0), (-1, -1), 0.75, LIGHT_RULE),
+        ("TOPPADDING", (0, 0), (-1, -1), 10), ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+        ("LEFTPADDING", (0, 0), (-1, -1), 10), ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+    ]))
+
+    return [header, body]
+
+
+# --------------------------------------------------------- story blocks ---
+
+def _story_flowables(it, ss, headline_text, meta_text):
+    flows = [Paragraph(headline_text, ss["Headline"])]
+    body_text = it.get("excerpt") or it.get("abstract")
+    if body_text:
+        flows.append(Paragraph(body_text, ss["Excerpt"]))
+    flows.append(Paragraph(meta_text, ss["Byline"]))
+    link = it.get("link")
+    if link:
+        flows.append(Paragraph(
+            f'<link href="{link}" color="#c0392b">Read full article &#187;</link>',
+            ss["ReadMore"]
+        ))
+    return flows
+
+
+def _story_block(it, ss, story, headline_text, meta_text, image_url=None):
+    text_flows = _story_flowables(it, ss, headline_text, meta_text)
+    img = _make_image_flowable(image_url, IMG_COL_WIDTH, IMG_MAX_HEIGHT) if image_url else None
+    if img is not None:
+        table = Table([[img, text_flows]], colWidths=[IMG_COL_WIDTH, TEXT_COL_WIDTH])
+        table.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (0, 0), 0),
+            ("RIGHTPADDING", (0, 0), (0, 0), 4 * mm),
+            ("LEFTPADDING", (1, 0), (1, 0), 0),
+            ("RIGHTPADDING", (1, 0), (1, 0), 0),
+            ("TOPPADDING", (0, 0), (-1, -1), 0),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+        ]))
+        story.append(table)
+    else:
+        story.extend(text_flows)
+
+
+def _byline(it):
+    source = it.get("source", "")
+    published = it.get("published")
+    if published:
+        return f'{source} &middot; {published.strftime("%d %B %Y")}'
+    return source
 
 
 def _teaser_dek(excerpt, max_chars=140):
@@ -85,30 +270,42 @@ def _teaser_dek(excerpt, max_chars=140):
     return excerpt[:max_chars].rsplit(" ", 1)[0].rstrip(".,;: ") + "…"
 
 
-def _byline(it):
-    """'Source Name · 08 August 2026' — falls back gracefully if no date."""
-    source = it.get("source", "")
-    published = it.get("published")
-    if published:
-        return f'{source} &middot; {published.strftime("%d %B %Y")}'
-    return source
+def _teaser_flowables(section, top, ss):
+    flows = [Paragraph(section.upper(), ss["TeaserLabel"])]
+    headline = (f'<link href="{top["link"]}" color="#1a2b4c">{top["title"]}</link>'
+                if top.get("link") else top["title"])
+    flows.append(Paragraph(headline, ss["TeaserHeadline"]))
+    dek = _teaser_dek(top.get("excerpt", ""))
+    if dek:
+        flows.append(Paragraph(dek, ss["TeaserDek"]))
+    return flows
 
 
-def _story_block(it, ss, story, headline_text, meta_text):
-    story.append(Paragraph(headline_text, ss["Headline"]))
-    body_text = it.get("excerpt") or it.get("abstract")
-    if body_text:
-        story.append(Paragraph(body_text, ss["Excerpt"]))
-    story.append(Paragraph(meta_text, ss["Byline"]))
-    link = it.get("link")
-    if link:
-        story.append(Paragraph(
-            f'<link href="{link}" color="#c0392b">Read full article &#187;</link>',
-            ss["ReadMore"]
-        ))
+def _teaser_block(section, top, ss, story):
+    text_flows = _teaser_flowables(section, top, ss)
+    img = _make_image_flowable(top.get("image"), TEASER_IMG_WIDTH, TEASER_IMG_HEIGHT) if top.get("image") else None
+    if img is not None:
+        text_col_w = CONTENT_WIDTH - TEASER_IMG_WIDTH - 4 * mm
+        table = Table([[img, text_flows]], colWidths=[TEASER_IMG_WIDTH, text_col_w])
+        table.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (0, 0), 0),
+            ("RIGHTPADDING", (0, 0), (0, 0), 4 * mm),
+            ("LEFTPADDING", (1, 0), (1, 0), 0),
+            ("RIGHTPADDING", (1, 0), (1, 0), 0),
+            ("TOPPADDING", (0, 0), (-1, -1), 0),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+        ]))
+        story.append(table)
+    else:
+        story.extend(text_flows)
+        story.append(Spacer(1, 3))
 
 
-def build_pdf(news, journals, output_path, feed_warnings=None):
+# ------------------------------------------------------------- builder ----
+
+def build_pdf(news, journals, output_path, blogs=None, feed_warnings=None):
+    blogs = blogs or {}
     doc = SimpleDocTemplate(
         output_path, pagesize=A4,
         topMargin=14 * mm, bottomMargin=18 * mm,
@@ -131,17 +328,19 @@ def build_pdf(news, journals, output_path, feed_warnings=None):
         colWidths=[doc.width / 2.0, doc.width / 2.0],
     )
     edition_row.setStyle(TableStyle([
-        ("LEFTPADDING", (0, 0), (-1, -1), 0),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
-        ("TOPPADDING", (0, 0), (-1, -1), 0),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ("TOPPADDING", (0, 0), (-1, -1), 0), ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
     ]))
     story.append(edition_row)
     story.append(HRFlowable(width="100%", thickness=3, color=BLACK, spaceBefore=3, spaceAfter=2))
     story.append(HRFlowable(width="100%", thickness=0.75, color=BLACK, spaceBefore=1, spaceAfter=14))
 
-    # ---- FRONT PAGE (top story teaser from every section, at a glance) ----
+    # ---- THOUGHTS FOR THE DAY ----
+    story.extend(_thoughts_for_the_day(ss))
+    story.append(Spacer(1, 16))
+
+    # ---- FRONT PAGE ----
     story.append(Paragraph("TODAY'S HEADLINES", ss["SectionHeader"]))
     story.append(HRFlowable(width="100%", thickness=1, color=NAVY, spaceAfter=8))
 
@@ -150,15 +349,8 @@ def build_pdf(news, journals, output_path, feed_warnings=None):
         if not items:
             continue
         any_teaser = True
-        top = items[0]
-        story.append(Paragraph(section.upper(), ss["TeaserLabel"]))
-        headline = f'<link href="{top["link"]}" color="#1a2b4c">{top["title"]}</link>' if top.get("link") else top["title"]
-        story.append(Paragraph(headline, ss["TeaserHeadline"]))
-        dek = _teaser_dek(top.get("excerpt", ""))
-        if dek:
-            story.append(Paragraph(dek, ss["TeaserDek"]))
+        _teaser_block(section, items[0], ss, story)
 
-    # top tier-1 journal pick, if any, gets a mention too
     top_journal = None
     for section, items in journals.items():
         for it in items:
@@ -183,50 +375,85 @@ def build_pdf(news, journals, output_path, feed_warnings=None):
     story.append(HRFlowable(width="100%", thickness=0.5, color=NAVY, spaceBefore=1, spaceAfter=16))
 
     # ---- NEWS ----
+    story.append(PageBreak())
     story.append(Paragraph("NEWS", ss["SectionHeader"]))
-    story.append(HRFlowable(width="100%", thickness=1, color=NAVY, spaceAfter=8))
+    story.append(HRFlowable(width="100%", thickness=1, color=NAVY, spaceAfter=10))
 
     for section, items in news.items():
-        story.append(Paragraph(section.upper(), ss["SubHeader"]))
+        story.append(_kicker(section, ss))
+        story.append(Spacer(1, 6))
         if not items:
             story.append(Paragraph("Nothing new in this section today.", ss["Empty"]))
+            story.append(Spacer(1, 10))
             continue
         for i, it in enumerate(items):
-            headline = f'<link href="{it["link"]}" color="#1a2b4c">{it["title"]}</link>' if it.get("link") else it["title"]
-            _story_block(it, ss, story, headline, _byline(it))
+            headline = (f'<link href="{it["link"]}" color="#1a2b4c">{it["title"]}</link>'
+                        if it.get("link") else it["title"])
+            _story_block(it, ss, story, headline, _byline(it), image_url=it.get("image"))
             if i < len(items) - 1:
                 story.append(HRFlowable(width="35%", thickness=0.4, color=LIGHT_RULE,
-                                         spaceBefore=4, spaceAfter=2, hAlign="LEFT"))
+                                         spaceBefore=6, spaceAfter=6, hAlign="LEFT"))
+            else:
+                story.append(Spacer(1, 12))
 
-    story.append(Spacer(1, 8))
-    story.append(HRFlowable(width="100%", thickness=2.2, color=NAVY, spaceBefore=4, spaceAfter=2))
+    story.append(HRFlowable(width="100%", thickness=2.2, color=NAVY, spaceBefore=2, spaceAfter=2))
     story.append(HRFlowable(width="100%", thickness=0.5, color=NAVY, spaceBefore=1, spaceAfter=14))
 
+    # ---- BLOGS (long-form — these feeds carry full post text, not just a teaser) ----
+    if blogs:
+        story.append(PageBreak())
+        story.append(Paragraph("BLOGS", ss["SectionHeader"]))
+        story.append(HRFlowable(width="100%", thickness=1, color=NAVY, spaceAfter=10))
+
+        for section, items in blogs.items():
+            story.append(_kicker(section, ss))
+            story.append(Spacer(1, 6))
+            if not items:
+                story.append(Paragraph("No new posts in this section this week.", ss["Empty"]))
+                story.append(Spacer(1, 10))
+                continue
+            for i, it in enumerate(items):
+                headline = (f'<link href="{it["link"]}" color="#1a2b4c">{it["title"]}</link>'
+                            if it.get("link") else it["title"])
+                _story_block(it, ss, story, headline, _byline(it), image_url=it.get("image"))
+                if i < len(items) - 1:
+                    story.append(HRFlowable(width="35%", thickness=0.4, color=LIGHT_RULE,
+                                             spaceBefore=6, spaceAfter=6, hAlign="LEFT"))
+                else:
+                    story.append(Spacer(1, 12))
+
+        story.append(HRFlowable(width="100%", thickness=2.2, color=NAVY, spaceBefore=2, spaceAfter=2))
+        story.append(HRFlowable(width="100%", thickness=0.5, color=NAVY, spaceBefore=1, spaceAfter=14))
+
     # ---- JOURNALS ----
+    story.append(PageBreak())
     story.append(Paragraph("JOURNAL WATCH", ss["SectionHeader"]))
-    story.append(HRFlowable(width="100%", thickness=1, color=NAVY, spaceAfter=8))
+    story.append(HRFlowable(width="100%", thickness=1, color=NAVY, spaceAfter=10))
 
     for section, items in journals.items():
-        story.append(Paragraph(section.upper(), ss["SubHeader"]))
+        story.append(_kicker(section, ss))
+        story.append(Spacer(1, 6))
         if not items:
             story.append(Paragraph("No new articles matched this search in the lookback window.", ss["Empty"]))
+            story.append(Spacer(1, 10))
             continue
         for i, it in enumerate(items):
-            mark = "&#9733; " if it["tier1"] else ""  # star prefix for tier-1 journals
-            headline = f'{mark}<link href="{it["link"]}" color="#1a2b4c">{it["title"]}</link>' if it.get("link") else f'{mark}{it["title"]}'
+            mark = "&#9733; " if it["tier1"] else ""
+            headline = (f'{mark}<link href="{it["link"]}" color="#1a2b4c">{it["title"]}</link>'
+                        if it.get("link") else f'{mark}{it["title"]}')
             meta = f'{it["journal"]} &middot; {it["pubdate"]}'
-            _story_block(it, ss, story, headline, meta)
+            _story_block(it, ss, story, headline, meta)  # no images for PubMed articles
             if i < len(items) - 1:
                 story.append(HRFlowable(width="35%", thickness=0.4, color=LIGHT_RULE,
-                                         spaceBefore=4, spaceAfter=2, hAlign="LEFT"))
+                                         spaceBefore=6, spaceAfter=6, hAlign="LEFT"))
+            else:
+                story.append(Spacer(1, 12))
 
-    # ---- MAINTENANCE FOOTER (feed health — only appears when something's broken) ----
+    # ---- MAINTENANCE FOOTER ----
     if feed_warnings:
-        story.append(Spacer(1, 10))
+        story.append(Spacer(1, 6))
         story.append(HRFlowable(width="100%", thickness=0.5, color=LIGHT_RULE, spaceAfter=4))
-        story.append(Paragraph(
-            f"SOURCES NEEDING ATTENTION TODAY ({len(feed_warnings)})", ss["MaintHeader"]
-        ))
+        story.append(Paragraph(f"SOURCES NEEDING ATTENTION TODAY ({len(feed_warnings)})", ss["MaintHeader"]))
         for w in feed_warnings:
             story.append(Paragraph(w, ss["MaintItem"]))
 
@@ -235,7 +462,6 @@ def build_pdf(news, journals, output_path, feed_warnings=None):
 
 
 if __name__ == "__main__":
-    # Quick smoke test with fake data
     news = {
         "Test Section": [
             {
@@ -243,9 +469,9 @@ if __name__ == "__main__":
                 "link": "https://example.com",
                 "source": "Example Times",
                 "published": datetime.now(),
-                "excerpt": "This is a sample excerpt pulled from the feed's own summary "
-                           "field, long enough to show how the justified body text wraps "
-                           "across a couple of lines in the newspaper-style layout.",
+                "excerpt": "This is a sample excerpt long enough to show how the "
+                           "justified body text wraps in the newspaper-style layout.",
+                "image": None,
             }
         ]
     }
@@ -255,5 +481,5 @@ if __name__ == "__main__":
              "link": "https://pubmed.ncbi.nlm.nih.gov/", "tier1": True}
         ]
     }
-    build_pdf(news, journals, "/tmp/test_digest2.pdf")
-    print("Built /tmp/test_digest2.pdf")
+    build_pdf(news, journals, "/tmp/test_digest3.pdf")
+    print("Built /tmp/test_digest3.pdf")
