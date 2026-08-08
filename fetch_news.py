@@ -46,6 +46,12 @@ def fetch_news():
         for url in feed_urls:
             try:
                 parsed = feedparser.parse(url)
+                status = getattr(parsed, "status", None)
+                if not parsed.entries:
+                    # feedparser doesn't raise on HTTP errors (403, etc.) — it just
+                    # comes back empty, so this is the only place that catches it.
+                    reason = f"HTTP {status}" if status and status >= 400 else "0 entries returned"
+                    print(f"[news] WARNING: {section} — {url} — {reason} — check this feed")
                 source_name = parsed.feed.get("title", url)
                 for entry in parsed.entries:
                     raw_summary = entry.get("summary") or entry.get("description", "")
