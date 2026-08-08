@@ -1,0 +1,46 @@
+name: Daily Digest
+
+on:
+  schedule:
+    # 06:30 IST = 01:00 UTC. Edit the UTC time here to change delivery time.
+    - cron: "0 1 * * *"
+  workflow_dispatch: {}  # lets you trigger it manually from the Actions tab, for testing
+
+permissions:
+  contents: write  # needed so the workflow can commit the generated PDF back to the repo
+
+jobs:
+  build-and-send:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Build the digest PDF
+        run: python main.py
+
+      - name: Commit and push the new PDF
+        run: |
+          git config user.name "daily-digest-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add docs/
+          git diff --quiet --cached || git commit -m "Daily digest $(date -u +%Y-%m-%d)"
+          git push
+
+      - name: Send via WhatsApp
+        env:
+          TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
+          TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
+          TWILIO_WHATSAPP_TO: ${{ secrets.TWILIO_WHATSAPP_TO }}
+        run: |
+          PDF_URL="https://${{ github.repository_owner }}.github.io/$(basename ${{ github.repository }})/latest.pdf"
+          echo "Waiting on: $PDF_URL"
+          python send_whatsapp.py "$PDF_URL"
