@@ -41,6 +41,17 @@ def fetch_news():
     cutoff = datetime.now(timezone.utc) - timedelta(hours=config.NEWS_MAX_AGE_HOURS)
     results = {}
 
+def fetch_news():
+    """Returns (results, warnings):
+    - results: {section_name: [ {title, link, source, published, excerpt} ]}
+    - warnings: list of "section — url — reason" strings, one per feed that
+      returned 0 entries or a bad HTTP status this run — for surfacing in the
+      PDF and/or the Actions log, not just the log.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=config.NEWS_MAX_AGE_HOURS)
+    results = {}
+    warnings = []
+
     for section, feed_urls in config.NEWS_FEEDS.items():
         all_items = []  # every entry fetched, regardless of age (used as fallback)
         for url in feed_urls:
@@ -51,7 +62,9 @@ def fetch_news():
                     # feedparser doesn't raise on HTTP errors (403, etc.) — it just
                     # comes back empty, so this is the only place that catches it.
                     reason = f"HTTP {status}" if status and status >= 400 else "0 entries returned"
-                    print(f"[news] WARNING: {section} — {url} — {reason} — check this feed")
+                    msg = f"{section} — {url} — {reason}"
+                    print(f"[news] WARNING: {msg} — check this feed")
+                    warnings.append(msg)
                 source_name = parsed.feed.get("title", url)
                 for entry in parsed.entries:
                     raw_summary = entry.get("summary") or entry.get("description", "")
@@ -63,7 +76,9 @@ def fetch_news():
                         "excerpt": _clean_excerpt(raw_summary),
                     })
             except Exception as e:
+                msg = f"{section} — {url} — error: {e}"
                 print(f"[news] Skipping feed {url}: {e}")
+                warnings.append(msg)
 
         def _dedupe_sorted(items):
             items = sorted(items, key=lambda x: x["published"] or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
@@ -85,14 +100,18 @@ def fetch_news():
 
         results[section] = deduped[:config.MAX_NEWS_ITEMS_PER_SECTION]
 
-    return results
+    return results, warnings
 
 
 if __name__ == "__main__":
-    news = fetch_news()
+    news, warnings = fetch_news()
     for section, items in news.items():
         print(f"\n=== {section} ({len(items)}) ===")
         for it in items:
             print(f"- {it['title']}  [{it['source']}]")
             if it["excerpt"]:
                 print(f"    {it['excerpt'][:120]}...")
+    if warnings:
+        print(f"\n=== {len(warnings)} feed warning(s) ===")
+        for w in warnings:
+            print(f"! {w}")
