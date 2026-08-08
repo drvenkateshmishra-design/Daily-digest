@@ -1,8 +1,9 @@
 """Fetches and filters recent items from configured RSS feeds."""
 import feedparser
+import re
+import html as html_lib
 from datetime import datetime, timezone, timedelta
 from time import mktime
-
 import config
 
 
@@ -14,8 +15,29 @@ def _entry_datetime(entry):
     return None
 
 
+_TAG_RE = re.compile(r"<[^>]+>")
+_WS_RE = re.compile(r"\s+")
+
+
+def _clean_excerpt(raw, max_chars=None):
+    """Strip HTML, decode entities, collapse whitespace, truncate on a word
+    boundary. Uses whatever summary the feed itself provides — no scraping,
+    no fetching the article page, so it works the same whether the source
+    is open or paywalled."""
+    if not raw:
+        return ""
+    max_chars = max_chars or getattr(config, "NEWS_EXCERPT_MAX_CHARS", 500)
+    text = _TAG_RE.sub(" ", raw)
+    text = html_lib.unescape(text)
+    text = _WS_RE.sub(" ", text).strip()
+    if len(text) <= max_chars:
+        return text
+    truncated = text[:max_chars].rsplit(" ", 1)[0]
+    return truncated.rstrip(".,;: ") + "…"
+
+
 def fetch_news():
-    """Returns dict: {section_name: [ {title, link, source, published} ]}"""
+    """Returns dict: {section_name: [ {title, link, source, published, excerpt} ]}"""
     cutoff = datetime.now(timezone.utc) - timedelta(hours=config.NEWS_MAX_AGE_HOURS)
     results = {}
 
@@ -26,11 +48,13 @@ def fetch_news():
                 parsed = feedparser.parse(url)
                 source_name = parsed.feed.get("title", url)
                 for entry in parsed.entries:
+                    raw_summary = entry.get("summary") or entry.get("description", "")
                     all_items.append({
                         "title": entry.get("title", "Untitled").strip(),
                         "link": entry.get("link", ""),
                         "source": source_name,
                         "published": _entry_datetime(entry),
+                        "excerpt": _clean_excerpt(raw_summary),
                     })
             except Exception as e:
                 print(f"[news] Skipping feed {url}: {e}")
@@ -48,7 +72,6 @@ def fetch_news():
 
         recent = [it for it in all_items if not it["published"] or it["published"] >= cutoff]
         deduped = _dedupe_sorted(recent)
-
         if not deduped:
             # Fallback: nothing in the age window — show the most recent items anyway
             # so the section isn't empty (better slightly stale than blank).
@@ -65,3 +88,5 @@ if __name__ == "__main__":
         print(f"\n=== {section} ({len(items)}) ===")
         for it in items:
             print(f"- {it['title']}  [{it['source']}]")
+            if it["excerpt"]:
+                print(f"    {it['excerpt'][:120]}...")
