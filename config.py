@@ -36,16 +36,6 @@ NEWS_FEEDS = {
         "https://www.sportskeeda.com/feed",
         "http://feeds.bbci.co.uk/sport/rss.xml",
     ],
-    "Editorials & Opinion": [
-        "https://www.thehindu.com/opinion/feeder/default.rss",
-        "http://indianexpress.com/section/opinion/feed/",
-        "https://www.hindustantimes.com/feeds/rss/opinion/rssfeed.xml",
-        "https://www.thehindubusinessline.com/opinion/feeder/default.rss",
-        # Hindi-language editorials
-        "https://www.bhaskar.com/rss-feed/1061/",              # Dainik Bhaskar - देश (national desk incl. edit pieces)
-        "https://www.jansatta.com/feed/",                       # Jansatta (IE's Hindi paper) - opinion-heavy
-        "https://feed.livehindustan.com/rss/3127",              # Live Hindustan
-    ],
 }
 MAX_NEWS_ITEMS_PER_SECTION = 6
 NEWS_MAX_AGE_HOURS = 96  # only include items published in the last N hours (some feeds post infrequently)
@@ -75,5 +65,5 @@ TIER1_JOURNALS = [
 # all come from GitHub Actions secrets — do not hardcode them here.
 
 # ---- OUTPUT ----
-PDF_TITLE = "Daily Digest"
+PDF_TITLE = "Venki Times"
 TIMEZONE = "Asia/Kolkata"
