@@ -5,6 +5,7 @@ import html as html_lib
 from datetime import datetime, timezone, timedelta
 from time import mktime
 import config
+from seen_store import item_key
 
 # Sent with every feed fetch. Several feeds (e.g. kevinmd.com) 403 on
 # feedparser's default UA but work fine with a normal browser UA — costs
@@ -81,10 +82,17 @@ def _clean_excerpt(raw, max_chars=None):
     return truncated.rstrip(".,;: ") + "…"
 
 
-def _fetch_feed_group(feeds_dict, max_age_hours, max_items_per_section, excerpt_max_chars):
+def _fetch_feed_group(feeds_dict, max_age_hours, max_items_per_section, excerpt_max_chars, already_seen_keys=None):
     """Shared fetch/dedupe/trim logic used by both fetch_news() and
     fetch_blogs() — same shape, different config values (blogs post less
-    often and get a much longer excerpt cap since full text is the point)."""
+    often and get a much longer excerpt cap since full text is the point).
+
+    already_seen_keys: optional set of item keys (see seen_store.item_key)
+    that have already appeared in a past digest — filtered out before the
+    final per-section cap, so a slow-moving feed doesn't just repeat
+    yesterday's top story. If filtering would leave a section completely
+    empty, the unfiltered list is used instead — same "better slightly
+    stale than blank" philosophy as the age-window fallback below."""
     cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
     results = {}
     warnings = []
@@ -142,20 +150,28 @@ def _fetch_feed_group(feeds_dict, max_age_hours, max_items_per_section, excerpt_
             # so the section isn't empty (better slightly stale than blank).
             deduped = _dedupe_sorted(all_items)
 
+        if already_seen_keys:
+            unrepeated = [it for it in deduped if item_key(it) not in already_seen_keys]
+            # Same fallback philosophy as above: don't let "don't repeat"
+            # empty out a section that simply has nothing new today —
+            # showing a repeat beats showing nothing.
+            deduped = unrepeated if unrepeated else deduped
+
         results[section] = deduped[:max_items_per_section]
 
     return results, warnings
 
 
-def fetch_news():
+def fetch_news(already_seen_keys=None):
     """Returns (results, warnings) — see _fetch_feed_group."""
     return _fetch_feed_group(
         config.NEWS_FEEDS, config.NEWS_MAX_AGE_HOURS,
         config.MAX_NEWS_ITEMS_PER_SECTION, config.NEWS_EXCERPT_MAX_CHARS,
+        already_seen_keys=already_seen_keys,
     )
 
 
-def fetch_blogs():
+def fetch_blogs(already_seen_keys=None):
     """Same shape as fetch_news() but for long-form blog sources — longer
     lookback window (blogs post less often), fewer items per section, much
     higher excerpt cap since these feeds actually carry full post text."""
