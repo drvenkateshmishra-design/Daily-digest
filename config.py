@@ -123,6 +123,18 @@ BLOG_FEEDS = {
         # thinner than the others as a result — say the word if you want
         # another pass at finding more.
     ],
+    "Movies & TV": [
+        "https://www.rogerebert.com/feed",  # verified excellent full-text reviews (median ~9K chars), covers film + streaming TV, daily
+        "https://screenhub.blog/feed",  # verified full-text (median ~5.7K chars), film essays/retrospectives
+        # indiewire.com, thefilmexperience.net, decentfilms.com were tested
+        # and rejected (teaser-only, 503, or 404 respectively).
+    ],
+    "Books": [
+        "https://www.theparisreview.org/blog/feed/",  # verified excellent full-text (median ~12.7K chars), literary essays/reviews
+        "https://bookriot.com/feed/",  # verified real content (median ~700 chars — shorter, more like a strong excerpt than full-text, but genuine)
+        "https://feeds.feedburner.com/BigalsBooksAndPals",  # verified full-text (median ~2.9K chars), indie/self-pub book reviews
+        # alittleblogofbooks.com (teaser-only) and washingtonindependentreviewofbooks.com (404) were tested and rejected.
+    ],
 }
 BLOG_MAX_AGE_HOURS = 168  # 1 week — blogs post less often than news
 MAX_BLOG_ITEMS_PER_SECTION = 3
