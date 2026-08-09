@@ -1,27 +1,21 @@
-"""Fetches a link to one random poem from Kavita Kosh (kavitakosh.org) for
-the daily "Ek Kavita Roj" box.
+"""Standalone utility for regenerating config.py's KAVITA_ROJ_POEMS pool.
 
-IMPORTANT — this only ever returns a TITLE, a POET NAME, and a URL. It
-never fetches or reproduces the poem's actual text. Kavita Kosh hosts both
-centuries-old public-domain poets and living/recent copyrighted ones side
-by side with no reliable automated way to tell them apart, so reproducing
-full poem text daily would risk violating copyright regardless of which
-poem happens to get picked. A link carries none of that risk — same reason
-every news/blog story in this pipeline links out instead of scraping full
-articles from sources that don't offer full text.
+NOT imported by main.py anymore — see config.py's comment above
+KAVITA_ROJ_POEMS for why: GitHub Actions runner IPs get a blanket 403 from
+kavitakosh.org (confirmed live, 8/8 attempts, while the identical request
+works fine from other environments — this is IP-range blocking on their
+end, not anything wrong with the request itself; the same run also hit a
+403 on two unrelated Substack feeds, confirming it's about where the
+request comes from, not what it contains). A live per-day call would just
+fail every time the pipeline actually runs. So the daily pick now comes
+from a pre-verified static pool in config.py instead (same pattern as the
+Sanskrit/English/Hindi quotes, which never touch the network at all).
 
-How it finds an actual poem (not a poet bio page, help page, etc.):
-Kavita Kosh is a MediaWiki wiki. Individual poem pages are titled
-"<poem title> / <poet name>" and are members of the category
-"श्रेणी:कविता" (~71,000 pages as of Aug 2026). There's no "random member of
-a category" API call available on this wiki (the RandomInCategory
-extension isn't installed), so this asks the API for a random page from
-the main namespace (list=random, which returns poem pages AND poet bio
-pages AND anything else in that namespace, mixed) and retries until it
-gets a title matching the "X / Y" poem format, then double-checks that
-page is actually a member of श्रेणी:कविता before accepting it. In practice
-poems vastly outnumber other main-namespace pages, so this usually
-succeeds on the first or second try.
+Run this file directly, from a machine/network that ISN'T IP-blocked, to
+regenerate or grow that pool — it prints one JSON poem per success and you
+can pipe/collect the output. Not run automatically by anything.
+
+Below this line, the fetch logic itself is unchanged from before.
 """
 import requests
 import urllib.parse
