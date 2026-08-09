@@ -113,6 +113,14 @@ def _styles():
                            fontSize=11.5, leading=21, textColor=INK, alignment=TA_CENTER, spaceAfter=2))
     ss.add(ParagraphStyle("DevaPoetMeta", parent=ss["Normal"], fontName=deva_font,
                            fontSize=8.3, leading=14, textColor=GREY, alignment=TA_CENTER, spaceAfter=0))
+    # ---- Ek Kavita Roj (daily poem link — title/poet only, links out; see
+    # _ek_kavita_roj()) — reuses DevaPoem/DevaPoetMeta above, plus this one
+    # extra style for the outbound link itself, which needs the Devanagari
+    # font (unlike ReadMore above, which is only ever used on ASCII text).
+    ss.add(ParagraphStyle("DevaReadMore", parent=ss["Normal"], fontName=deva_font,
+                           fontSize=8.5, leading=13, textColor=ACCENT, alignment=TA_CENTER, spaceAfter=0))
+    ss.add(ParagraphStyle("KavitaHeader", parent=ss["Normal"], fontName=deva_font,
+                           fontSize=9.5, textColor=white, alignment=TA_CENTER, spaceAfter=0))
     return ss
 
 
@@ -218,6 +226,39 @@ def _thoughts_for_the_day(ss):
     return [header, body]
 
 
+def _ek_kavita_roj(poem, ss):
+    """Small bordered box linking to one random poem on Kavita Kosh — title
+    and poet name only, NOT the poem text itself (Kavita Kosh hosts both
+    public-domain and living/copyrighted poets with no reliable way to tell
+    them apart automatically, so unlike Thoughts-for-the-Day this never
+    reproduces the work — same 'Read full article »' link pattern used for
+    every news/blog story elsewhere in this PDF). `poem` is the dict
+    returned by fetch_kavita.fetch_kavita_roj() — title/poet/url — or None
+    if that fetch failed, in which case the caller skips this box entirely."""
+    inner = [
+        Paragraph(poem["title"], ss["DevaPoem"]),
+        Paragraph(f'— {poem["poet"]}', ss["DevaPoetMeta"]),
+        Spacer(1, 4),
+        Paragraph(f'<link href="{poem["url"]}" color="#c0392b">पूरी कविता पढ़ें (Kavita Kosh पर) &#187;</link>',
+                   ss["DevaReadMore"]),
+    ]
+
+    header = Table([[Paragraph("एक कविता रोज़ · POEM OF THE DAY", ss["KavitaHeader"])]], colWidths=[CONTENT_WIDTH])
+    header.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), NAVY),
+        ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+
+    body = Table([[inner]], colWidths=[CONTENT_WIDTH])
+    body.setStyle(TableStyle([
+        ("BOX", (0, 0), (-1, -1), 0.75, LIGHT_RULE),
+        ("TOPPADDING", (0, 0), (-1, -1), 8), ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+        ("LEFTPADDING", (0, 0), (-1, -1), 10), ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+    ]))
+
+    return [header, body]
+
+
 # --------------------------------------------------------- story blocks ---
 
 def _story_flowables(it, ss, headline_text, meta_text):
@@ -304,7 +345,7 @@ def _teaser_block(section, top, ss, story):
 
 # ------------------------------------------------------------- builder ----
 
-def build_pdf(news, journals, output_path, blogs=None, feed_warnings=None):
+def build_pdf(news, journals, output_path, blogs=None, feed_warnings=None, kavita_roj=None):
     blogs = blogs or {}
     doc = SimpleDocTemplate(
         output_path, pagesize=A4,
@@ -338,6 +379,12 @@ def build_pdf(news, journals, output_path, blogs=None, feed_warnings=None):
 
     # ---- THOUGHTS FOR THE DAY ----
     story.extend(_thoughts_for_the_day(ss))
+    story.append(Spacer(1, 12))
+
+    # ---- EK KAVITA ROJ (daily poem link) — skipped entirely if the fetch
+    # failed today (dead network, Kavita Kosh down, etc.); never blocks the build.
+    if kavita_roj:
+        story.extend(_ek_kavita_roj(kavita_roj, ss))
     story.append(Spacer(1, 16))
 
     # ---- FRONT PAGE ----
