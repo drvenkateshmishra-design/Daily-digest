@@ -226,15 +226,25 @@ def _thoughts_for_the_day(ss):
     return [header, body]
 
 
-def _ek_kavita_roj(poem, ss):
+def _ek_kavita_roj(ss):
     """Small bordered box linking to one random poem on Kavita Kosh — title
     and poet name only, NOT the poem text itself (Kavita Kosh hosts both
     public-domain and living/copyrighted poets with no reliable way to tell
     them apart automatically, so unlike Thoughts-for-the-Day this never
     reproduces the work — same 'Read full article »' link pattern used for
-    every news/blog story elsewhere in this PDF). `poem` is the dict
-    returned by fetch_kavita.fetch_kavita_roj() — title/poet/url — or None
-    if that fetch failed, in which case the caller skips this box entirely."""
+    every news/blog story elsewhere in this PDF).
+
+    Picks from config.KAVITA_ROJ_POEMS — a pre-verified static pool, date-
+    seeded same as _thoughts_for_the_day() above — rather than calling
+    Kavita Kosh live. That's deliberate, not a shortcut: GitHub Actions
+    runner IPs get a blanket 403 from kavitakosh.org (confirmed live — see
+    fetch_kavita.py's docstring), so a live per-day call would just fail
+    every time this runs in Actions. Picking from a pool built once from an
+    unblocked environment sidesteps that entirely, same as how the Sanskrit/
+    English/Hindi quotes above never touch the network at all."""
+    rng = random.Random(int(date.today().strftime("%Y%m%d")) + 1)  # +1 so it doesn't pick the same index as _thoughts_for_the_day's rng on the same day
+    poem = rng.choice(config.KAVITA_ROJ_POEMS)
+
     inner = [
         Paragraph(poem["title"], ss["DevaPoem"]),
         Paragraph(f'— {poem["poet"]}', ss["DevaPoetMeta"]),
@@ -345,7 +355,7 @@ def _teaser_block(section, top, ss, story):
 
 # ------------------------------------------------------------- builder ----
 
-def build_pdf(news, journals, output_path, blogs=None, feed_warnings=None, kavita_roj=None):
+def build_pdf(news, journals, output_path, blogs=None, feed_warnings=None):
     blogs = blogs or {}
     doc = SimpleDocTemplate(
         output_path, pagesize=A4,
@@ -381,10 +391,8 @@ def build_pdf(news, journals, output_path, blogs=None, feed_warnings=None, kavit
     story.extend(_thoughts_for_the_day(ss))
     story.append(Spacer(1, 12))
 
-    # ---- EK KAVITA ROJ (daily poem link) — skipped entirely if the fetch
-    # failed today (dead network, Kavita Kosh down, etc.); never blocks the build.
-    if kavita_roj:
-        story.extend(_ek_kavita_roj(kavita_roj, ss))
+    # ---- EK KAVITA ROJ (daily poem link) ----
+    story.extend(_ek_kavita_roj(ss))
     story.append(Spacer(1, 16))
 
     # ---- FRONT PAGE ----
