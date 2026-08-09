@@ -2,6 +2,7 @@
 import os
 from fetch_news import fetch_news, fetch_blogs
 from fetch_journals import fetch_journals
+from fetch_kavita import fetch_kavita_roj
 from build_pdf import build_pdf
 from send_email import send as send_email
 
@@ -15,11 +16,18 @@ def main():
     blogs, blog_warnings = fetch_blogs()
     print("Fetching journal articles...")
     journals = fetch_journals()
+    print("Fetching today's poem (Ek Kavita Roj)...")
+    kavita_roj = fetch_kavita_roj()
     print("Building PDF...")
-    build_pdf(news, journals, OUTPUT_PATH, blogs=blogs, feed_warnings=news_warnings + blog_warnings)
+    build_pdf(news, journals, OUTPUT_PATH, blogs=blogs,
+              feed_warnings=news_warnings + blog_warnings, kavita_roj=kavita_roj)
     print("Sending email...")
     send_email(OUTPUT_PATH)
     print("Done.")
+
+
+if __name__ == "__main__":
+    main()
 
 
 if __name__ == "__main__":
