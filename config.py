@@ -23,6 +23,9 @@ NEWS_FEEDS = {
         # (url, display_name) tuple to override a broken feed-reported name.
         ("https://feeds.feedburner.com/ndtvnews-india-news", "NDTV News"),
         "https://feeds.bbci.co.uk/news/world/rss.xml",
+        "https://www.thebetterindia.com/feed/",  # verified full-text (median ~1.9K chars), fresh daily, solutions/human-interest journalism
+        # ptinews.com requested too, but its whole site 403s (even the
+        # homepage) regardless of User-Agent — no feed to add, not a code issue.
     ],
     "Tech & Gadgets": [
         # Gadgets360's two feeds 403 unconditionally (confirmed: still 403
@@ -128,6 +131,13 @@ BLOG_FEEDS = {
         "https://screenhub.blog/feed",  # verified full-text (median ~5.7K chars), film essays/retrospectives
         # indiewire.com, thefilmexperience.net, decentfilms.com were tested
         # and rejected (teaser-only, 503, or 404 respectively).
+    ],
+    "Indian Movies & Web Series": [
+        "https://koimoi.com/category/reviews/feed/",  # verified excellent full-text (median ~4.3K chars), fresh daily — covers both theatrical & OTT/web-series reviews
+        "https://www.bollywoodhungama.com/rss/movie-review.xml",  # verified excellent full-text (median ~4.7K chars), fresh, dedicated review feed
+        # filmcompanion.in (0 entries — feed currently broken despite the
+        # site's reputation), dontcallitbollywood.com (full-text but
+        # dormant ~7 months), ottplay.com (403) were tested and rejected.
     ],
     "Books": [
         "https://www.theparisreview.org/blog/feed/",  # verified excellent full-text (median ~12.7K chars), literary essays/reviews
