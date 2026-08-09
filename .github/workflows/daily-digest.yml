@@ -6,6 +6,9 @@ on:
     - cron: "0 1 * * *"
   workflow_dispatch: {}  # lets you trigger it manually from the Actions tab, for testing
 
+permissions:
+  contents: write  # needed so the "persist seen items" step below can push back to the repo
+
 jobs:
   build-and-send:
     runs-on: ubuntu-latest
@@ -27,3 +30,17 @@ jobs:
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
         run: python main.py
+
+      - name: Persist seen-items state
+        # main.py writes/updates seen_items.json locally so tomorrow's run
+        # can skip repeats — but GitHub Actions runs are otherwise fully
+        # stateless, so that file has to get committed back to the repo or
+        # it's gone the moment this job ends. Only commits if the file
+        # actually changed (git diff --staged --quiet exits 0 = no
+        # changes = skip the commit rather than push an empty one).
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add seen_items.json
+          git diff --staged --quiet || git commit -m "Update seen items [skip ci]"
+          git push
